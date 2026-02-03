@@ -1,0 +1,12 @@
+# NetLogo temporary and backup files
+*.nlogo~
+*.bak
+*.tmp
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Output data (si decideixes exportar CSVs de dades en el futur)
+*.csv
+*.txt
