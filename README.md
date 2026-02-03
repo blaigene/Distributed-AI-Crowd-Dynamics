@@ -21,7 +21,7 @@ The model's coordination resilience and emergent behaviors were evaluated across
 ### 🏆 Featured: Main System Demonstration
 The **Main Demo** showcases the baseline performance of the Iterative Reservation Protocol under balanced, symmetric exit conditions.
 
-https://github.com/blaigene/Distributed-AI-Crowd-Dynamics/media/main_demo.mp4
+| ![Main Demo](media/main_demo.mp4) |
 
 ---
 
