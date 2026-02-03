@@ -16,27 +16,32 @@ The system architecture is based on three pillars of distributed intelligence:
 
 ## 🚀 Experimental Scenarios & Benchmarking
 
-The model's coordination resilience and emergent behaviors were evaluated across 5 distinct environmental configurations.
+The model's coordination resilience was evaluated across 5 distinct environments. 
 
 ### 🏆 Featured: Main System Demonstration
 The **Main Demo** showcases the baseline performance of the Iterative Reservation Protocol under balanced, symmetric exit conditions.
 
-| ![Main Demo](media/main_demo.mp4) |
+<p align="center">
+  <video src="media/main_demo.mp4" width="100%" controls autoplay loop muted></video>
+</p>
 
 ---
 
 ### 📂 Stress Test Gallery
 Below is a comparative breakdown of the specific coordination challenges addressed in each specialized environment:
 
-| **Blocking Wall** (Pathfinding) | **Single Bottleneck** (Queuing) |
+| **Blocking Wall (Pathfinding)** | **Single Bottleneck (Queuing)** |
 | :---: | :---: |
-| ![Wall](media/blocking_wall_scenario.mp4) | ![Bottleneck](media/single_bottleneck_scenario.mp4) |
-| **Complex Navigation:** Tests Dijkstra accuracy through architectural barriers. | **Crowd Pressure:** Analyzes emergent single-file formation under high density. |
+| <video src="media/blocking_wall_scenario.mp4" width="100%" autoplay loop muted></video> | <video src="media/single_bottleneck_scenario.mp4" width="100%" autoplay loop muted></video> |
+| **Complex Navigation:** Dijkstra accuracy through barriers. | **Crowd Pressure:** Emergent single-file formation. |
 
 | **Asymmetric Capacity** | **External Symmetric** |
 | :---: | :---: |
-| ![Asymmetric](media/asymmetric_capacity_scenario.mp4) | ![External](media/external_symmetric_exits_scenario.mp4) |
-| **Resource Disparity:** Studies agent decision-making with 1-vs-3 exit friction. | **Flow Distribution:** Evaluates long-distance cost-map consistency. |
+| <video src="media/asymmetric_capacity_scenario.mp4" width="100%" autoplay loop muted></video> | <video src="media/external_symmetric_exits_scenario.mp4" width="100%" autoplay loop muted></video> |
+| **Resource Disparity:** 1-vs-3 exit friction study. | **Flow Distribution:** Cost-map consistency. |
+
+> [!IMPORTANT]
+> If the videos do not autoplay in your browser, you can find the raw files in the `media/` folder. For maximum compatibility, viewing via Google Chrome or Microsoft Edge is recommended.
 
 > [!NOTE]
 > All simulations were recorded using a standardized agent density to ensure comparable metrics across different topological constraints.
