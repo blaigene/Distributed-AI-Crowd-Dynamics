@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![NetLogo](https://img.shields.io/badge/NetLogo-7.0.2-orange.svg)](https://ccl.northwestern.edu/netlogo/)
 
-An advanced Agent-Based Model (ABM) developed to simulate high-density pedestrian flow using **Distributed Artificial Intelligence (DAI)** principles. This project moves away from simple reactive steering, implementing a sophisticated **Iterative Negotiation & Reservation Protocol** for spatial conflict resolution.
+An advanced Agent-Based Model (ABM) developed to simulate high-density pedestrian flow using **Distributed Artificial Intelligence (DAI)** principles. This project moves away from simple reactive steering, implementing a sophisticated **Iterative Negotiation & Reservation Protocol** for spatial conflict resolution. 
 
 ## 🔬 Core Engineering & Implementation
 
