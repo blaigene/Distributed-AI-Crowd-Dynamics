@@ -1,0 +1,1565 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.2" snapToGrid="true">
+  <code><![CDATA[; Distributed AI Classroom Evacuation Model
+; NetLogo 7.0.2 compatible
+;
+; CREDITS:
+; Developer: BLAI GENÉ MORA
+; Affiliation: Università degli Studi di Modena e Reggio Emilia (Unimore)
+; Department: Dipartimento di Ingegneria "Enzo Ferrari"
+;
+; DAI PRINCIPLES IMPLEMENTED:
+; 1. Distributed Coordination Mechanisms (Reservation System)
+; 2. Game Theoretic Phenomena (Right-of-Way/Priority Resolution)
+; 3. Collective Intelligence Phenomena (Emergent Queuing via Coordination)
+
+; --------------------------------------------------
+; GLOBAL & PATCH / TURTLES STATE
+; --------------------------------------------------
+globals [
+  exits                ; list of [x y] coordinates for exit targets
+  seats                ; list of [x y] seat coordinates
+  
+  ; DAI Metrics (for reporting performance)
+  total-evacuated      ; total number of agents that reached an exit
+  ticks-to-first-evacuated ; simulation time for the first agent to exit
+  map-scenario-name    ; String: Name of the active exit scenario
+  
+  ; Scientific Metrics (for detailed analysis)
+  total-ticks-evacuation ; total simulation time until the last agent exits
+  max-queue-size       ; maximum number of agents counted near any exit (congestion metric)
+  total-deadlocks      ; total times an agent invoked the passive anti-deadlock protocol
+  avg-congestion-left  ; accumulated congestion for the Left Exit proxy
+  avg-congestion-right ; accumulated congestion for the Right Exit proxy
+]
+
+patches-own [
+  reserved-by          ; Turtle: which agent has reserved this patch for the current tick (Coordination)
+  obstacle?            ; Boolean: True if this patch is a wall/obstacle
+  path-cost            ; Numeric: cost to reach the nearest exit (pre-calculated via Flood Fill/Dijkstra)
+]
+
+
+turtles-own [            
+  agent-type           ; String: "professor" or "student" (Used for Hierarchical Priority)
+  planned-patch        ; Patch: the patch the agent intends to move to (pre-move planning)
+  obstacle-avoid-history ; List of patches: short-term memory to prevent oscillation/immediate deadlocks
+  reservation-blacklist ; List of patches: patches that resulted in a conflict, temporarily ignored (Anti-Deadlock)
+  confirmed-patch      ; Patch: the reserved patch after the iterative planning phase
+]
+
+; --------------------------------------------------
+; MAIN SETUP
+; --------------------------------------------------
+
+to setup
+  clear-all
+  ; Initialize globals
+  set total-evacuated 0
+  set ticks-to-first-evacuated 0
+  reset-metrics
+  
+  setup-map
+  setup-exits           ; Defines exit location and capacity heuristic
+  setup-pathfinding     ; CORE DAI: Pre-calculates path-cost for navigation
+  setup-seats
+  setup-people
+
+  reset-ticks
+end
+
+; --------------------------------------------------
+; ENVIRONMENT LAYOUT (Walls/Seats)
+; --------------------------------------------------
+to setup-map
+  ; Setup logic for classroom dimensions and walls (obstacles)
+  let n-rows 8
+  let n-cols 10
+  let x-start min-pxcor + 2
+  let y-start max-pycor - 2
+  let x-gap 2
+  let y-gap 2
+  set seats []
+
+  ask patches [ 
+    set obstacle? false 
+    set reserved-by nobody
+    set pcolor gray + 4.5
+  ]
+
+  ; Create interior horizontal walls (desks)
+  let wall-rows [2 4 6 8 10 12 14 16]
+  let wall-gap 5
+  foreach wall-rows [ row-y ->
+    ask patches with [
+      pycor = y-start - row-y + 1 and pxcor >= min-pxcor + wall-gap and pxcor <= max-pxcor - wall-gap
+    ] [
+      set pcolor brown + 1
+      set obstacle? true 
+    ]
+  ]
+end
+
+; --------------------------------------------------
+; EXITS SETUP (Select One)
+; --------------------------------------------------
+
+to setup-exits
+  ; central-symmetric-exits
+  ; external-symmetric-exits
+  ; single-exit
+  ; asymmetric-capacity;
+  blocking-wall
+end
+
+; --------------------------------------------------
+; SEATS LAYOUT (Initial positions)
+; --------------------------------------------------
+to setup-seats
+  set seats []
+  ; Logic to calculate seat coordinates
+  let n-rows 8
+  let n-cols 10
+  let x-start -9
+  let y-start max-pycor - 4
+  let x-gap 2
+  let y-gap 2
+
+  let row-indices n-values n-rows [ i -> i ]
+  foreach row-indices [ row-index ->
+    let col-indices n-values n-cols [ j -> j ]
+    foreach col-indices [ col-index ->
+      let seat-x x-start + col-index * x-gap
+      let seat-y y-start - row-index * y-gap
+      if seat-x <= min-pxcor + 1 [ set seat-x min-pxcor + 2 ]
+      if seat-x >= max-pxcor - 1 [ set seat-x max-pxcor - 2 ]
+      set seats lput (list seat-x seat-y) seats
+    ]
+  ]
+end
+
+; --------------------------------------------------
+; DAI: PATHFINDING (Dijkstra/Flood Fill)
+; --------------------------------------------------
+to setup-pathfinding
+  ; PRINCIPLE: Foundation for Coordination & Collective Intelligence
+  ; Calculates the shortest distance (cost) to any exit, accounting for obstacles.
+
+  ; 1. Initialization: Infinite cost for all non-exit patches
+  ask patches with [pcolor != green] [ 
+    set path-cost 100000 
+    if obstacle? [ set path-cost 100001 ] ; Blocked patch
+  ]
+
+  ; 2. Propagation Loop (Flood Fill)
+  let cost-changed true
+  while [cost-changed] [
+    set cost-changed false
+    
+    ; All patches propagate the cost from their neighbors
+    ask patches with [not obstacle? and path-cost > 0] [
+      let current-cost path-cost
+      
+      ; Find the minimum neighbor cost + 1 (for current step)
+      let min-neighbor-cost min [ path-cost ] of neighbors4
+      
+      if current-cost > min-neighbor-cost + 1 [
+        set path-cost min-neighbor-cost + 1
+        set cost-changed true
+      ]
+    ]
+  ]
+end
+
+; --------------------------------------------------
+; AGENTS SETUP
+; --------------------------------------------------
+
+to setup-people
+  ; Professor: High visibility, high priority
+  create-turtles 1 [
+    set color yellow
+    set size 2
+    set shape "star"
+    set agent-type "professor"
+    setxy 0 max-pycor - 1 
+    set planned-patch nobody
+    set obstacle-avoid-history [] 
+  ]
+
+  ; Students (random colors for visual distinction)
+  let student-colors [blue]
+
+  foreach seats [ pos ->
+    create-turtles 1 [
+      set color one-of student-colors 
+      set size 1
+      set heading 0
+      setxy item 0 pos item 1 pos
+      set agent-type "student"
+      set planned-patch nobody
+      set obstacle-avoid-history [] 
+      set reservation-blacklist [] ; Anti-deadlock list
+    ]
+  ]
+end
+
+; --------------------------------------------------
+; GO LOOP (Main Simulation Steps)
+; --------------------------------------------------
+to go
+  ; 1. Reset state (for the start of the planning phase)
+  ask patches [ set reserved-by nobody ]
+  ask turtles [ 
+    set planned-patch nobody
+    set confirmed-patch nobody
+    set reservation-blacklist [] 
+  ]
+
+  ; 2. CORE DAI: Iterative Planning & Reservation
+  ; PRINCIPLE: Distributed Coordination
+  let changes-made true
+  let iteration-count 0 ; Safety counter (optional, but good practice)
+  
+  ; Repeats until an entire iteration passes with NO agent successfully making a new reservation 
+  ; (i.e., no change in 'confirmed-patch').
+  while [changes-made and iteration-count < 1000] [
+    set changes-made false
+    set iteration-count iteration-count + 1
+    
+    ; Agents without a confirmed plan attempt to reserve a new spot.
+    ask turtles with [confirmed-patch = nobody] [
+      ; Store the current plan before calling the reservation logic
+      let current-planned-patch planned-patch 
+      
+      plan-and-reserve
+      
+      ; Check if the reservation logic resulted in a new plan (Coordination successful)
+      if planned-patch != current-planned-patch [
+        set changes-made true
+      ]
+    ]
+    
+    ; Agents who successfully reserved a patch confirm their plan for the move phase
+    ask turtles with [planned-patch != nobody] [ set confirmed-patch planned-patch ]
+    
+    ; If any new agent confirmed a plan, the 'changes-made' flag will be true, 
+    ; and the loop will iterate again to resolve cascading conflicts.
+  ]
+  
+  if iteration-count >= 1000 [
+    output-print (word "WARNING: Planning loop exceeded 1000 iterations at tick " ticks)
+  ]
+  
+  ; 3. Execute Moves
+  ask turtles [ execute-move ]
+
+  calculate-metrics-tick
+
+  tick
+
+  ; Check and record time to first evacuation
+  if ticks-to-first-evacuated = 0 and total-evacuated > 0 [
+    set ticks-to-first-evacuated ticks
+  ]
+  
+  ; Stop condition
+  if not any? turtles [ 
+    set total-ticks-evacuation ticks 
+    finalize-and-report 
+    stop 
+  ]
+end
+
+; --------------------------------------------------
+; DAI: CORE LOGIC (Coordination & Game Theory)
+; --------------------------------------------------
+
+to plan-and-reserve
+  ; PRINCIPLES: Distributed Coordination (Reservation) & Game Theory (Conflict Resolution)
+
+  let my-path-cost path-cost 
+  
+  ; 1. IDENTIFY CANDIDATES (Filtering based on predicted flow)
+  ; A candidate patch is one that is non-obstacle AND:
+  ; (a) Currently empty
+  ; OR (b) Occupied, but all occupants have a confirmed plan (will move out)
+  
+  let candidates neighbors with [
+    not obstacle? and           
+    pcolor != gray and          
+    
+    ; Predictive Flow Filter: Patch is free or will be freed
+    (not any? turtles-here) or 
+    (all? turtles-here [confirmed-patch != nobody])
+    
+    ; Movement Condition: Only advance (move towards lower path-cost)
+    and path-cost < my-path-cost
+  ]
+  
+  ; Filter candidates based on short-term memory (anti-oscillation)
+  let candidates-filtered candidates with [ 
+    not member? self [obstacle-avoid-history] of myself and
+    not member? self [reservation-blacklist] of myself
+  ]
+
+  ; If no valid candidate, update memory and stop planning
+  if not any? candidates-filtered [
+    set obstacle-avoid-history lput patch-here obstacle-avoid-history
+    set planned-patch nobody
+    stop
+  ]
+
+  if length obstacle-avoid-history > 5 [ set obstacle-avoid-history [] ]
+  
+  ; 2. SCORING (Greedy Movement based on pre-calculated Path-Cost)
+  let best-candidate min-one-of candidates-filtered [ path-cost ]
+  
+  ; 3. RESERVATION PROTOCOL (Conflict Resolution / Right-of-Way)
+  ifelse best-candidate != nobody [
+    
+    let my-d path-cost 
+    let rival-of-reservation [reserved-by] of best-candidate
+    
+    ifelse rival-of-reservation = nobody [
+      ; CASE 1: Patch is free (Normal use)
+      ask best-candidate [ set reserved-by myself ]
+      set planned-patch best-candidate
+    ] [
+      ; CASE 2: CONFLICT (Another agent has already reserved the spot)
+      let rival rival-of-reservation
+      let rival-type [agent-type] of rival
+      let rival-d [path-cost] of rival
+      
+      let i-win? false
+      
+      ; HIERARCHICAL PRIORITY (Game Theory)
+      if rival-type = "professor" and agent-type = "student" [ set i-win? false ]
+      if rival-type = "student" and agent-type = "professor" [ set i-win? true ]
+      
+      ; TIE-BREAKING (If same type, shortest distance wins - Greedy Strategy)
+      if rival-type = agent-type [
+        if my-d < rival-d [ set i-win? true ] 
+        ; Secondary Tie-breaker (based on 'who' number)
+        if my-d = rival-d [ if who < [who] of rival [ set i-win? true ]]
+      ]
+      
+      ifelse i-win? [
+        ; I win the reservation
+        ask best-candidate [ set reserved-by myself ]
+        ask rival [ set planned-patch nobody ] ; Rival must replan
+        ask rival [ set reservation-blacklist lput best-candidate reservation-blacklist]
+        set planned-patch best-candidate
+      ] [
+        ; Rival wins. I passively back off (Anti-Deadlock Protocol)
+        set planned-patch nobody
+        set reservation-blacklist lput best-candidate reservation-blacklist
+        set total-deadlocks total-deadlocks + 1 ; Tally the conflict resolution
+      ]
+    ]
+  ] [
+    set planned-patch nobody
+  ]
+  
+end
+
+to execute-move
+  ; Moves the agent only if it successfully reserved the patch.
+  if planned-patch != nobody and [reserved-by] of planned-patch = self [
+    facexy [pxcor] of planned-patch [pycor] of planned-patch
+    move-to planned-patch
+ 
+    
+    ; Check Exit
+    if [pcolor] of patch-here = green [
+      process-arrival
+    ]
+    
+    set planned-patch nobody
+  ]
+end
+
+to process-arrival
+  ; Handles agent exiting the simulation
+  let time-took ticks
+  set total-evacuated total-evacuated + 1
+  die ; The agent is removed
+end
+
+; --------------------------------------------------
+; DAI: METRICS AND ANALYSIS (Collective Intelligence)
+; --------------------------------------------------
+to calculate-metrics-tick
+  ; PURPOSE: Distributed Monitoring of Collective Intelligence (Congestion & Queuing).
+  ; Each tick, we assess emergent traffic phenomena near critical points (Exits).
+
+  ; 1. CONGESTION ANALYSIS (Distributed Queue Size Check)
+  
+  ; We use max-queue-size to track the worst-case queuing event across all exits.
+  
+  let current-exit-queue 0
+  
+  ; Agents near the exit (radius 3) indicate emergent queue formation.
+  foreach exits [ ex ->
+    let ex-x item 0 ex
+    let ex-y item 1 ex
+    
+    ; Congestion: count agents within a 3-patch radius of the exit target.
+    let cong count turtles with [distancexy ex-x ex-y <= 3]
+    
+    ; Update maximum queue observed so far across ALL ticks.
+    set max-queue-size max (list max-queue-size cong)
+    set current-exit-queue current-exit-queue + cong
+  ]
+  
+  ; 2. PROXY METRICS (Simplified L/R Congestion for Visualization)
+  ; This section provides L/R proxy averages for the final report.
+  let proxy-cong-left 0
+  let proxy-cong-right 0
+  
+  if length exits > 0 [ 
+    set proxy-cong-left count turtles with [distancexy item 0 (item 0 exits) item 1 (item 0 exits) <= 3] 
+  ]
+  if length exits > 1 [ 
+    set proxy-cong-right count turtles with [distancexy item 0 (item 1 exits) item 1 (item 1 exits) <= 3] 
+  ]
+
+  ; Accumulate the proxy values for the final average calculation.
+  set avg-congestion-left avg-congestion-left + proxy-cong-left
+  set avg-congestion-right avg-congestion-right + proxy-cong-right
+  
+  ; 3. DISTRIBUTED STATUS REPORT (Console Output)
+  if ticks mod 10 = 0 [
+    output-print (word "TICKS: " ticks " | 🏃 EVACUATED: " total-evacuated)
+    output-print (word "   [DAI STATUS] Max Queue: " max-queue-size " | Conflicts (Deadlocks): " total-deadlocks)
+    output-print (word "   [CONGESTION] Proxy L/R: " proxy-cong-left " / " proxy-cong-right)
+    output-print "--------------------------------------------------"
+  ]
+end
+
+to reset-metrics
+  ; Reset all global metrics for a new experiment run
+  set total-evacuated 0
+  set ticks-to-first-evacuated 0
+  set total-ticks-evacuation 0
+  set max-queue-size 0
+  set total-deadlocks 0
+  set avg-congestion-left 0
+  set avg-congestion-right 0
+end
+
+to finalize-and-report
+  ; Calculates final derived metrics and outputs the result table.
+  
+  let total-ticks total-ticks-evacuation
+  let safe-ticks max list total-ticks 1 ; Avoid division by zero
+  
+  ; Calculation of Final Metric Averages
+  let final-avg-cong-left avg-congestion-left / safe-ticks
+  let final-avg-cong-right avg-congestion-right / safe-ticks
+  
+  output-print "=========================================="
+  output-print "📊 FINAL DAI SIMULATION RESULTS"
+  output-print "=========================================="
+  
+  ; --- CONTEXT ---
+  output-print (word "Scenario: " map-scenario-name) ; <--- HIGH PRIORITY: Map Name
+  output-print (word "Total Agents Evacuated: " total-evacuated)
+  output-print "------------------------------------------"
+
+  ; --- CRITICAL DAI METRICS (Focus on Time) ---
+  output-print (word "CRITICAL METRIC: Total Evacuation Time: ")
+  output-print (word "        >>> " total-ticks " TICKS <<<") ; <--- HIGHLIGHTED
+  output-print (word "Time to First Evacuation: " ticks-to-first-evacuated " ticks")
+
+  ; --- COORDINATION & CONGESTION METRICS ---
+  output-print "------------------------------------------"
+  output-print "Coordination & Collective Intelligence"
+  output-print (word "Max Queue Length (Congestion Peak): " max-queue-size)
+  output-print (word "Total Deadlocks (Avoided Conflicts): " total-deadlocks)
+  output-print (word "Avg Congestion (Proxy L/R): " precision final-avg-cong-left 2 " / " precision final-avg-cong-right 2)
+  output-print "=========================================="
+end
+; --------------------------------------------------
+; DIFFERENT EXITS SETUPS (Experimentation Modules)
+; --------------------------------------------------
+
+to central-symmetric-exits
+  ; PURPOSE: Default setup with two equally attractive exits.
+  
+  set map-scenario-name "Central Symmetric Exits (2 Exits)" ;
+  
+  set exits (list (list -7 max-pycor) (list 7 max-pycor))
+  
+  ; --- EXIT A (Left - Single Patch) ---
+  ask patches with [pycor = max-pycor and pxcor = -7] [
+    set pcolor green
+    set obstacle? false
+    set path-cost 0.0 
+  ]
+  
+  ; --- EXIT B (Right - Single Patch) ---
+  ask patches with [pycor = max-pycor and (pxcor = 7)] [
+    set pcolor green
+    set obstacle? false
+    set path-cost 0.0 
+  ]
+  
+  set exits (list (list -7 max-pycor) (list 7 max-pycor)) 
+end
+
+to external-symmetric-exits
+  ; PURPOSE: Default setup with two equally external attractive exits.
+  
+  set map-scenario-name "External Symmetric Exits (2 Exits)" ;
+  
+  set exits (list (list -12 max-pycor) (list 12 max-pycor))
+  
+  ; --- EXIT A (Left - Single Patch) ---
+  ask patches with [pycor = max-pycor and pxcor = -12] [
+    set pcolor green
+    set obstacle? false
+    set path-cost 0.0 
+  ]
+  
+  ; --- EXIT B (Right - Single Patch) ---
+  ask patches with [pycor = max-pycor and (pxcor = 12)] [
+    set pcolor green
+    set obstacle? false
+    set path-cost 0.0 
+  ]
+  
+  set exits (list (list -12 max-pycor) (list 12 max-pycor)) 
+end
+
+to single-exit
+  ; PURPOSE: Tests the effectiveness of Distributed Coordination (Reservation) 
+  ; in achieving Emergent Single-File Queuing at a single bottleneck.
+  
+  set map-scenario-name "Single Central Exit (Bottleneck)"
+  
+  set exits (list (list 0 max-pycor))
+  
+  ; --- EXIT A (Center - Single Patch) ---
+  ask patches with [pycor = max-pycor and pxcor = 0] [
+    set pcolor green
+    set obstacle? false
+    set path-cost 0.0 
+  ]
+  
+  set exits (list (list 0 max-pycor))
+end
+
+to asymmetric-capacity
+  ; PURPOSE: To study the Collective Intelligence (or lack thereof) when agents 
+  ; must choose between a low-capacity exit (high friction) and a high-capacity one (low friction).
+  
+  set map-scenario-name "Asymmetric Capacity (1-vs-3 Patches)"
+  
+  set exits (list (list -12 max-pycor) 
+                  (list 11 max-pycor) 
+                  (list 12 max-pycor) 
+                  (list 13 max-pycor))
+  
+  set exits (list (list -12 max-pycor) (list 12 max-pycor)) 
+  
+  ; --- HEURISTIC APPLICATION: HIGH FRICTION (Exit A - Capacity 1) ---
+  let exit-patches-A [-12]
+  let high-friction-cost 6.0 ; COST: 6.0 (High cost discourages the choice)
+  
+  foreach exit-patches-A [ px ->
+    ask patches with [pycor = max-pycor and pxcor = px] [
+      set pcolor green
+      set obstacle? false
+      set path-cost high-friction-cost 
+    ]
+  ]
+  
+  ; --- HEURISTIC APPLICATION: LOW FRICTION (Exit B - Capacity 3) ---
+  let exit-patches-B [11 12 13] 
+  let low-friction-cost 0.0 ; COST: 0.0 (Low cost encourages the choice)
+  
+  foreach exit-patches-B [ px ->
+    ask patches with [pycor = max-pycor and pxcor = px] [
+      set pcolor green
+      set obstacle? false
+      set path-cost low-friction-cost 
+    ]
+  ]
+end
+
+to blocking-wall
+  ; PURPOSE: **Test the resilience of Distributed Coordination** and **Emergent Queuing** 
+  ; under maximal asymmetry. Evaluates system efficiency when agents must overcome 
+  ; complex pathfinding (due to the blocking wall) to converge on a single, 
+  ; extreme bottleneck exit.
+  
+  build-wall
+  
+  set map-scenario-name "Blocking Wall"
+  
+  ; Define the target coordinate (Top-Left Exit)
+  let left-exit-x min-pxcor + 1
+  let left-exit-y max-pycor
+  
+  set exits (list (list left-exit-x left-exit-y))
+  
+  ; --- EXIT (Left - Single Patch) ---
+  ask patches with [pycor = left-exit-y and pxcor = left-exit-x] [
+    set pcolor green
+    set obstacle? false
+    ; PATHFINDING HEURISTIC: Base cost of 0.0 for the Pathfinding algorithm.
+    set path-cost 0.0 
+  ]
+  
+  ; Ensure only this coordinate is tracked
+  set exits (list (list left-exit-x left-exit-y))
+end
+
+to build-wall
+  ; PURPOSE: Creates the specific horizontal blocking wall 
+  ; in the second desk row, extending it to the entire width.
+  
+  let y-start max-pycor - 2
+  let target-row 2
+  
+  ; Calculate the Y-coordinate of the second desk row
+  let wall-y y-start - target-row + 1
+  
+  ; Ask the patches along that row to become obstacles.
+  ; We use min-pxcor + 1 and max-pxcor - 1 to cover almost the entire width.
+  ask patches with [
+    pycor = wall-y and pxcor >= min-pxcor  and pxcor <= max-pxcor - 26
+  ] [
+    set pcolor orange
+    set obstacle? true 
+  ]
+end]]></code>
+  <widgets>
+    <view x="368" wrappingAllowedX="false" y="10" frameRate="30.0" minPycor="-10" height="571" showTickCounter="true" patchSize="27.0" fontSize="10" wrappingAllowedY="false" width="841" tickCounterLabel="ticks" maxPycor="10" updateMode="1" maxPxcor="15" minPxcor="-15"></view>
+    <button x="105" y="45" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">setup</button>
+    <button x="90" y="110" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">go</button>
+    <button x="305" y="95" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">go</button>
+    <button x="310" y="50" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">setup</button>
+  </widgets>
+  <info><![CDATA[## WHAT IS IT?
+
+This model is an Agent-Based Simulation (ABS) designed to study Distributed Artificial Intelligence (DAI) and Collective Intelligence phenomena in a multiagent system. It specifically focuses on managing high-density pedestrian flow during an emergency evacuation of a classroom.
+
+The central hypothesis tested is that efficient flow and emergent queuing are achieved not through central control, but through a system of local, distributed coordination rules, namely the Iterative Planning and Reservation Protocol combined with a Hierarchical Right-of-Way system. The model contrasts the efficiency of this DAI approach against simple reactive movement models.
+
+## HOW IT WORKS
+
+This model simulates an emergency evacuation of a classroom using Distributed Artificial Intelligence (DAI) principles to achieve efficient collective coordination. Agents (students and a professor) are autonomous, and there is no central control. Efficiency emerges solely from the local interaction rules.
+
+The simulation runs in a three-step cycle per tick:
+
+    1. State Reset: All patches are unreserved (reserved-by nobody). Agents clear their immediate plans.
+
+    2. Iterative Planning & Reservation (The CORE DAI Loop): Agents compete for space using a distributed Right-of-Way (Game Theory) protocol:
+
+        - Candidate Search: An agent identifies neighboring patches that move them closer to the exit (lower path-cost). Critically, the agent can consider patches currently occupied, provided the occupants have already confirmed a plan to move away (confirmed-patch != nobody). This ensures Predictive Flow and prevents unnecessary stopping.
+
+        - Reservation Conflict: If the optimal patch is reserved by a rival, the conflict is resolved based on strict priority:
+
+            · Hierarchy: The Professor (agent-type "professor") always wins over a Student.
+
+            · Greedy Priority: If types are equal, the agent closer to the exit (lower path-cost) wins, prioritizing movement down the queue.
+
+        - Anti-Deadlock Backoff: If an agent loses a conflict, they are put on a reservation-blacklist for the current cycle and cannot immediately re-compete for that exact spot, forcing them to look for alternative paths or wait one iteration, preventing local oscillation.
+
+    3. Execution: Agents execute their confirmed-patch move, advancing one step.
+
+Key DAI Components:
+
+    - Pathfinding (Dijkstra/Flood Fill): Before the simulation starts, the path-cost (shortest, non-Euclidean route) to the nearest exit is calculated for every patch, guiding intelligent movement around desks and walls.
+
+    - Coordination (Reservation System): Patches are reserved using reserved-by, avoiding simultaneous occupation and guaranteeing predictable flow resolution.
+
+## HOW TO USE IT
+
+1. Setup: Click the SETUP button. This initializes the classroom, places agents on seats, and calculates the path-cost for the selected scenario.
+
+2. Select Scenario: The scenario is set in the Code tab within to setup-exits. The default is external-symmetric-exits. To change the experiment, comment out the active scenario and uncomment another (e.g., asymmetric-capacity or single-exit).
+
+3. Run: Click the GO button to start the evacuation. The simulation stops automatically when all agents have exited.
+
+4. Analyze: The results are printed to the NetLogo Command Center via finalize-and-report when the simulation stop
+
+## THINGS TO NOTICE
+
+- Emergent Queuing: Notice how the agents, without being explicitly programmed to form a line, organize themselves into orderly, flowing queues toward the exits, especially near bottlenecks.
+
+- Professor Priority: Observe how the Professor (Yellow Star) is able to cut into a queue or successfully reserve a contested patch ahead of students, demonstrating the Hierarchical element of the coordination game.
+
+- Pathfinding vs. Euclidean: In scenarios like blocking-wall, observe how the agents use the pre-calculated path-cost to correctly navigate around large, complex obstacles, rather than simply moving towards the nearest coordinate (which would fail).
+
+- Congestion Collapse: In high-density areas (like the single-exit bottleneck), watch for short periods where total-deadlocks increases, indicating intense localized competition that requires the iterative planning loop to resolve.
+
+## THINGS TO TRY
+
+1. Change Scenarios: Run the simulation using the different setups in to setup-exits (e.g., asymmetric-capacity) to see how the DAI model handles resource disparity and bottleneck severity.
+
+2. Modify Agent Density: Adjust the size of the room or the number of seats (in setup-seats) to test the limits of the coordination model under extreme congestion.
+
+3. Break Coordination: Temporarily modify the resolution logic inside plan-and-reserve (e.g., make the tie-breaker random instead of distance-based) and observe the resulting decrease in flow and increase in total-deadlocks.
+
+## NETLOGO FEATURES
+
+- ask patches with [...] and path-cost: The core of the Pathfinding logic (setup-pathfinding) uses iterative querying across patches to spread the cost information, effectively implementing a Flood Fill / Dijkstra algorithm over the grid.
+
+- Iterative Planning Loop (while [changes-made...]): The go procedure uses a nested while loop to enforce resource arbitration within a single tick. This is a powerful, though computation-intensive, way to simulate simultaneous distributed consensus on movement.
+
+- patches-own reserved-by: Using a patch variable to store a turtle agent reference is essential for the distributed reservation system, acting as the centralized "lock" on a discrete resource.
+
+## RELATED MODELS
+
+- NetLogo Models Library:
+
+    · Traffic Basic: Demonstrates emergent queuing in a simpler road network.
+
+    · Wolf Sheep Predation (Alternative Versions): Examples of decentralized search and movement rules.
+
+- Research Areas: Multiagent Systems (MAS), Agent-Based Modeling (ABM), Crowd Dynamics Simulation, Cellular Automata.
+
+## CREDITS AND REFERENCES
+
+- Model Developer: BLAI GENÉ MORA
+
+- Concept Source: Based on principles of Distributed Artificial Intelligence (DAI) and multiagent coordination mechanisms (e.g., reservation protocols, hierarchy, and reactive scheduling).
+]]></info>
+  <turtleShapes>
+    <shape name="default" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="5"></point>
+        <point x="40" y="250"></point>
+        <point x="150" y="205"></point>
+        <point x="260" y="250"></point>
+      </polygon>
+    </shape>
+    <shape name="airplane" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="135" y="15"></point>
+        <point x="120" y="60"></point>
+        <point x="120" y="105"></point>
+        <point x="15" y="165"></point>
+        <point x="15" y="195"></point>
+        <point x="120" y="180"></point>
+        <point x="135" y="240"></point>
+        <point x="105" y="270"></point>
+        <point x="120" y="285"></point>
+        <point x="150" y="270"></point>
+        <point x="180" y="285"></point>
+        <point x="210" y="270"></point>
+        <point x="165" y="240"></point>
+        <point x="180" y="180"></point>
+        <point x="285" y="195"></point>
+        <point x="285" y="165"></point>
+        <point x="180" y="105"></point>
+        <point x="180" y="60"></point>
+        <point x="165" y="15"></point>
+      </polygon>
+    </shape>
+    <shape name="arrow" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="0" y="150"></point>
+        <point x="105" y="150"></point>
+        <point x="105" y="293"></point>
+        <point x="195" y="293"></point>
+        <point x="195" y="150"></point>
+        <point x="300" y="150"></point>
+      </polygon>
+    </shape>
+    <shape name="box" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="285"></point>
+        <point x="285" y="225"></point>
+        <point x="285" y="75"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="135"></point>
+        <point x="15" y="75"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="75"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="75"></point>
+        <point x="15" y="225"></point>
+        <point x="150" y="285"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <line endX="150" startY="285" marked="false" color="255" endY="135" startX="150"></line>
+      <line endX="15" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+      <line endX="285" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+    </shape>
+    <shape name="bug" rotatable="true" editableColorIndex="0">
+      <circle x="96" y="182" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="110" y="127" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <circle x="110" y="75" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <line endX="80" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+      <line endX="220" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+    </shape>
+    <shape name="butterfly" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="209" y="199"></point>
+        <point x="225" y="225"></point>
+        <point x="225" y="255"></point>
+        <point x="195" y="270"></point>
+        <point x="165" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="89" y="198"></point>
+        <point x="75" y="225"></point>
+        <point x="75" y="255"></point>
+        <point x="105" y="270"></point>
+        <point x="135" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="139" y="148"></point>
+        <point x="100" y="105"></point>
+        <point x="55" y="90"></point>
+        <point x="25" y="90"></point>
+        <point x="10" y="105"></point>
+        <point x="10" y="135"></point>
+        <point x="25" y="180"></point>
+        <point x="40" y="195"></point>
+        <point x="85" y="194"></point>
+        <point x="139" y="163"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="162" y="150"></point>
+        <point x="200" y="105"></point>
+        <point x="245" y="90"></point>
+        <point x="275" y="90"></point>
+        <point x="290" y="105"></point>
+        <point x="290" y="135"></point>
+        <point x="275" y="180"></point>
+        <point x="260" y="195"></point>
+        <point x="215" y="195"></point>
+        <point x="162" y="165"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="135" y="225"></point>
+        <point x="120" y="150"></point>
+        <point x="135" y="120"></point>
+        <point x="150" y="105"></point>
+        <point x="165" y="120"></point>
+        <point x="180" y="150"></point>
+        <point x="165" y="225"></point>
+      </polygon>
+      <circle x="135" y="90" marked="false" color="255" diameter="30" filled="true"></circle>
+      <line endX="195" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+      <line endX="105" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+    </shape>
+    <shape name="car" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="300" y="180"></point>
+        <point x="279" y="164"></point>
+        <point x="261" y="144"></point>
+        <point x="240" y="135"></point>
+        <point x="226" y="132"></point>
+        <point x="213" y="106"></point>
+        <point x="203" y="84"></point>
+        <point x="185" y="63"></point>
+        <point x="159" y="50"></point>
+        <point x="135" y="50"></point>
+        <point x="75" y="60"></point>
+        <point x="0" y="150"></point>
+        <point x="0" y="165"></point>
+        <point x="0" y="225"></point>
+        <point x="300" y="225"></point>
+        <point x="300" y="180"></point>
+      </polygon>
+      <circle x="180" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <circle x="30" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="162" y="80"></point>
+        <point x="132" y="78"></point>
+        <point x="134" y="135"></point>
+        <point x="209" y="135"></point>
+        <point x="194" y="105"></point>
+        <point x="189" y="96"></point>
+        <point x="180" y="89"></point>
+      </polygon>
+      <circle x="47" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+      <circle x="195" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+    </shape>
+    <shape name="circle" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="circle 2" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+    </shape>
+    <shape name="cow" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="200" y="193"></point>
+        <point x="197" y="249"></point>
+        <point x="179" y="249"></point>
+        <point x="177" y="196"></point>
+        <point x="166" y="187"></point>
+        <point x="140" y="189"></point>
+        <point x="93" y="191"></point>
+        <point x="78" y="179"></point>
+        <point x="72" y="211"></point>
+        <point x="49" y="209"></point>
+        <point x="48" y="181"></point>
+        <point x="37" y="149"></point>
+        <point x="25" y="120"></point>
+        <point x="25" y="89"></point>
+        <point x="45" y="72"></point>
+        <point x="103" y="84"></point>
+        <point x="179" y="75"></point>
+        <point x="198" y="76"></point>
+        <point x="252" y="64"></point>
+        <point x="272" y="81"></point>
+        <point x="293" y="103"></point>
+        <point x="285" y="121"></point>
+        <point x="255" y="121"></point>
+        <point x="242" y="118"></point>
+        <point x="224" y="167"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="73" y="210"></point>
+        <point x="86" y="251"></point>
+        <point x="62" y="249"></point>
+        <point x="48" y="208"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="25" y="114"></point>
+        <point x="16" y="195"></point>
+        <point x="9" y="204"></point>
+        <point x="23" y="213"></point>
+        <point x="25" y="200"></point>
+        <point x="39" y="123"></point>
+      </polygon>
+    </shape>
+    <shape name="cylinder" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="dot" rotatable="false" editableColorIndex="0">
+      <circle x="90" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+    </shape>
+    <shape name="face happy" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="90" y="239"></point>
+        <point x="62" y="213"></point>
+        <point x="47" y="191"></point>
+        <point x="67" y="179"></point>
+        <point x="90" y="203"></point>
+        <point x="109" y="218"></point>
+        <point x="150" y="225"></point>
+        <point x="192" y="218"></point>
+        <point x="210" y="203"></point>
+        <point x="227" y="181"></point>
+        <point x="251" y="194"></point>
+        <point x="236" y="217"></point>
+        <point x="212" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="face neutral" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="7" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <rectangle endX="240" startY="195" marked="false" color="255" endY="225" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="face sad" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="168"></point>
+        <point x="90" y="184"></point>
+        <point x="62" y="210"></point>
+        <point x="47" y="232"></point>
+        <point x="67" y="244"></point>
+        <point x="90" y="220"></point>
+        <point x="109" y="205"></point>
+        <point x="150" y="198"></point>
+        <point x="192" y="205"></point>
+        <point x="210" y="220"></point>
+        <point x="227" y="242"></point>
+        <point x="251" y="229"></point>
+        <point x="236" y="206"></point>
+        <point x="212" y="183"></point>
+      </polygon>
+    </shape>
+    <shape name="fish" rotatable="false" editableColorIndex="0">
+      <polygon color="-1" filled="true" marked="false">
+        <point x="44" y="131"></point>
+        <point x="21" y="87"></point>
+        <point x="15" y="86"></point>
+        <point x="0" y="120"></point>
+        <point x="15" y="150"></point>
+        <point x="0" y="180"></point>
+        <point x="13" y="214"></point>
+        <point x="20" y="212"></point>
+        <point x="45" y="166"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="135" y="195"></point>
+        <point x="119" y="235"></point>
+        <point x="95" y="218"></point>
+        <point x="76" y="210"></point>
+        <point x="46" y="204"></point>
+        <point x="60" y="165"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="75" y="45"></point>
+        <point x="83" y="77"></point>
+        <point x="71" y="103"></point>
+        <point x="86" y="114"></point>
+        <point x="166" y="78"></point>
+        <point x="135" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="136"></point>
+        <point x="151" y="77"></point>
+        <point x="226" y="81"></point>
+        <point x="280" y="119"></point>
+        <point x="292" y="146"></point>
+        <point x="292" y="160"></point>
+        <point x="287" y="170"></point>
+        <point x="270" y="195"></point>
+        <point x="195" y="210"></point>
+        <point x="151" y="212"></point>
+        <point x="30" y="166"></point>
+      </polygon>
+      <circle x="215" y="106" marked="false" color="255" diameter="30" filled="true"></circle>
+    </shape>
+    <shape name="flag" rotatable="false" editableColorIndex="0">
+      <rectangle endX="75" startY="15" marked="true" color="-1920102913" endY="300" startX="60" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="90" y="150"></point>
+        <point x="270" y="90"></point>
+        <point x="90" y="30"></point>
+      </polygon>
+      <line endX="90" startY="135" marked="true" color="-1920102913" endY="135" startX="75"></line>
+      <line endX="90" startY="45" marked="true" color="-1920102913" endY="45" startX="75"></line>
+    </shape>
+    <shape name="flower" rotatable="false" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="135" y="120"></point>
+        <point x="165" y="165"></point>
+        <point x="180" y="210"></point>
+        <point x="180" y="240"></point>
+        <point x="150" y="300"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="240"></point>
+        <point x="195" y="195"></point>
+        <point x="165" y="135"></point>
+      </polygon>
+      <circle x="85" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="147" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="192" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="85" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="70" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="25" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="96" y="51" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="113" y="68" marked="false" color="255" diameter="74" filled="true"></circle>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="189" y="233"></point>
+        <point x="219" y="188"></point>
+        <point x="249" y="173"></point>
+        <point x="279" y="188"></point>
+        <point x="234" y="218"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="180" y="255"></point>
+        <point x="150" y="210"></point>
+        <point x="105" y="210"></point>
+        <point x="75" y="240"></point>
+        <point x="135" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="house" rotatable="false" editableColorIndex="0">
+      <rectangle endX="255" startY="120" marked="true" color="-1920102913" endY="285" startX="45" filled="true"></rectangle>
+      <rectangle endX="180" startY="210" marked="false" color="255" endY="285" startX="120" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="120"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+      <line endX="270" startY="120" marked="false" color="255" endY="120" startX="30"></line>
+    </shape>
+    <shape name="leaf" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="210"></point>
+        <point x="135" y="195"></point>
+        <point x="120" y="210"></point>
+        <point x="60" y="210"></point>
+        <point x="30" y="195"></point>
+        <point x="60" y="180"></point>
+        <point x="60" y="165"></point>
+        <point x="15" y="135"></point>
+        <point x="30" y="120"></point>
+        <point x="15" y="105"></point>
+        <point x="40" y="104"></point>
+        <point x="45" y="90"></point>
+        <point x="60" y="90"></point>
+        <point x="90" y="105"></point>
+        <point x="105" y="120"></point>
+        <point x="120" y="120"></point>
+        <point x="105" y="60"></point>
+        <point x="120" y="60"></point>
+        <point x="135" y="30"></point>
+        <point x="150" y="15"></point>
+        <point x="165" y="30"></point>
+        <point x="180" y="60"></point>
+        <point x="195" y="60"></point>
+        <point x="180" y="120"></point>
+        <point x="195" y="120"></point>
+        <point x="210" y="105"></point>
+        <point x="240" y="90"></point>
+        <point x="255" y="90"></point>
+        <point x="263" y="104"></point>
+        <point x="285" y="105"></point>
+        <point x="270" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="240" y="165"></point>
+        <point x="240" y="180"></point>
+        <point x="270" y="195"></point>
+        <point x="240" y="210"></point>
+        <point x="180" y="210"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="195"></point>
+        <point x="135" y="240"></point>
+        <point x="120" y="255"></point>
+        <point x="105" y="255"></point>
+        <point x="105" y="285"></point>
+        <point x="135" y="285"></point>
+        <point x="165" y="240"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+    </shape>
+    <shape name="line" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="300" startX="150"></line>
+    </shape>
+    <shape name="line half" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="150" startX="150"></line>
+    </shape>
+    <shape name="pentagon" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="15"></point>
+        <point x="15" y="120"></point>
+        <point x="60" y="285"></point>
+        <point x="240" y="285"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+    </shape>
+    <shape name="person" rotatable="false" editableColorIndex="0">
+      <circle x="110" y="5" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="120" y="195"></point>
+        <point x="90" y="285"></point>
+        <point x="105" y="300"></point>
+        <point x="135" y="300"></point>
+        <point x="150" y="225"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="300"></point>
+        <point x="210" y="285"></point>
+        <point x="180" y="195"></point>
+        <point x="195" y="90"></point>
+      </polygon>
+      <rectangle endX="172" startY="79" marked="true" color="-1920102913" endY="94" startX="127" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="195" y="90"></point>
+        <point x="240" y="150"></point>
+        <point x="225" y="180"></point>
+        <point x="165" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="60" y="150"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="105"></point>
+      </polygon>
+    </shape>
+    <shape name="plant" rotatable="false" editableColorIndex="0">
+      <rectangle endX="165" startY="90" marked="true" color="-1920102913" endY="300" startX="135" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="255"></point>
+        <point x="90" y="210"></point>
+        <point x="45" y="195"></point>
+        <point x="75" y="255"></point>
+        <point x="135" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="255"></point>
+        <point x="210" y="210"></point>
+        <point x="255" y="195"></point>
+        <point x="225" y="255"></point>
+        <point x="165" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="180"></point>
+        <point x="90" y="135"></point>
+        <point x="45" y="120"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="180"></point>
+        <point x="165" y="210"></point>
+        <point x="225" y="180"></point>
+        <point x="255" y="120"></point>
+        <point x="210" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="105"></point>
+        <point x="90" y="60"></point>
+        <point x="45" y="45"></point>
+        <point x="75" y="105"></point>
+        <point x="135" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="105"></point>
+        <point x="165" y="135"></point>
+        <point x="225" y="105"></point>
+        <point x="255" y="45"></point>
+        <point x="210" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="90"></point>
+        <point x="120" y="45"></point>
+        <point x="150" y="15"></point>
+        <point x="180" y="45"></point>
+        <point x="165" y="90"></point>
+      </polygon>
+    </shape>
+    <shape name="sheep" rotatable="false" editableColorIndex="15">
+      <circle x="203" y="65" marked="true" color="-1" diameter="88" filled="true"></circle>
+      <circle x="70" y="65" marked="true" color="-1" diameter="162" filled="true"></circle>
+      <circle x="150" y="105" marked="true" color="-1" diameter="120" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="218" y="120"></point>
+        <point x="240" y="165"></point>
+        <point x="255" y="165"></point>
+        <point x="278" y="120"></point>
+      </polygon>
+      <circle x="214" y="72" marked="false" color="-1920102913" diameter="67" filled="true"></circle>
+      <rectangle endX="179" startY="223" marked="true" color="-1" endY="298" startX="164" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="45" y="285"></point>
+        <point x="30" y="285"></point>
+        <point x="30" y="240"></point>
+        <point x="15" y="195"></point>
+        <point x="45" y="210"></point>
+      </polygon>
+      <circle x="3" y="83" marked="true" color="-1" diameter="150" filled="true"></circle>
+      <rectangle endX="80" startY="221" marked="true" color="-1" endY="296" startX="65" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="195" y="285"></point>
+        <point x="210" y="285"></point>
+        <point x="210" y="240"></point>
+        <point x="240" y="210"></point>
+        <point x="195" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="276" y="85"></point>
+        <point x="285" y="105"></point>
+        <point x="302" y="99"></point>
+        <point x="294" y="83"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="219" y="85"></point>
+        <point x="210" y="105"></point>
+        <point x="193" y="99"></point>
+        <point x="201" y="83"></point>
+      </polygon>
+    </shape>
+    <shape name="square" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+    </shape>
+    <shape name="square 2" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+      <rectangle endX="240" startY="60" marked="false" color="255" endY="240" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="star" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="151" y="1"></point>
+        <point x="185" y="108"></point>
+        <point x="298" y="108"></point>
+        <point x="207" y="175"></point>
+        <point x="242" y="282"></point>
+        <point x="151" y="216"></point>
+        <point x="59" y="282"></point>
+        <point x="94" y="175"></point>
+        <point x="3" y="108"></point>
+        <point x="116" y="108"></point>
+      </polygon>
+    </shape>
+    <shape name="target" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <circle x="60" y="60" marked="true" color="-1920102913" diameter="180" filled="true"></circle>
+      <circle x="90" y="90" marked="false" color="255" diameter="120" filled="true"></circle>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+    </shape>
+    <shape name="tree" rotatable="false" editableColorIndex="0">
+      <circle x="118" y="3" marked="true" color="-1920102913" diameter="94" filled="true"></circle>
+      <rectangle endX="180" startY="195" marked="false" color="-1653716737" endY="300" startX="120" filled="true"></rectangle>
+      <circle x="65" y="21" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="116" y="41" marked="true" color="-1920102913" diameter="127" filled="true"></circle>
+      <circle x="45" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+      <circle x="104" y="74" marked="true" color="-1920102913" diameter="152" filled="true"></circle>
+    </shape>
+    <shape name="triangle" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+    </shape>
+    <shape name="triangle 2" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="151" y="99"></point>
+        <point x="225" y="223"></point>
+        <point x="75" y="224"></point>
+      </polygon>
+    </shape>
+    <shape name="truck" rotatable="false" editableColorIndex="0">
+      <rectangle endX="195" startY="45" marked="true" color="-1920102913" endY="187" startX="4" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="296" y="193"></point>
+        <point x="296" y="150"></point>
+        <point x="259" y="134"></point>
+        <point x="244" y="104"></point>
+        <point x="208" y="104"></point>
+        <point x="207" y="194"></point>
+      </polygon>
+      <rectangle endX="195" startY="60" marked="false" color="-1" endY="105" startX="195" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="238" y="112"></point>
+        <point x="252" y="141"></point>
+        <point x="219" y="141"></point>
+        <point x="218" y="112"></point>
+      </polygon>
+      <circle x="234" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <rectangle endX="214" startY="185" marked="true" color="-1920102913" endY="194" startX="181" filled="true"></rectangle>
+      <circle x="144" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="144" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="234" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+    </shape>
+    <shape name="turtle" rotatable="true" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="215" y="204"></point>
+        <point x="240" y="233"></point>
+        <point x="246" y="254"></point>
+        <point x="228" y="266"></point>
+        <point x="215" y="252"></point>
+        <point x="193" y="210"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="195" y="90"></point>
+        <point x="225" y="75"></point>
+        <point x="245" y="75"></point>
+        <point x="260" y="89"></point>
+        <point x="269" y="108"></point>
+        <point x="261" y="124"></point>
+        <point x="240" y="105"></point>
+        <point x="225" y="105"></point>
+        <point x="210" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="105" y="90"></point>
+        <point x="75" y="75"></point>
+        <point x="55" y="75"></point>
+        <point x="40" y="89"></point>
+        <point x="31" y="108"></point>
+        <point x="39" y="124"></point>
+        <point x="60" y="105"></point>
+        <point x="75" y="105"></point>
+        <point x="90" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="132" y="85"></point>
+        <point x="134" y="64"></point>
+        <point x="107" y="51"></point>
+        <point x="108" y="17"></point>
+        <point x="150" y="2"></point>
+        <point x="192" y="18"></point>
+        <point x="192" y="52"></point>
+        <point x="169" y="65"></point>
+        <point x="172" y="87"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="85" y="204"></point>
+        <point x="60" y="233"></point>
+        <point x="54" y="254"></point>
+        <point x="72" y="266"></point>
+        <point x="85" y="252"></point>
+        <point x="107" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="119" y="75"></point>
+        <point x="179" y="75"></point>
+        <point x="209" y="101"></point>
+        <point x="224" y="135"></point>
+        <point x="220" y="225"></point>
+        <point x="175" y="261"></point>
+        <point x="128" y="261"></point>
+        <point x="81" y="224"></point>
+        <point x="74" y="135"></point>
+        <point x="88" y="99"></point>
+      </polygon>
+    </shape>
+    <shape name="wheel" rotatable="false" editableColorIndex="0">
+      <circle x="3" y="3" marked="true" color="-1920102913" diameter="294" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <line endX="150" startY="285" marked="true" color="-1920102913" endY="15" startX="150"></line>
+      <line endX="285" startY="150" marked="true" color="-1920102913" endY="150" startX="15"></line>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+      <line endX="79" startY="40" marked="true" color="-1920102913" endY="269" startX="216"></line>
+      <line endX="269" startY="84" marked="true" color="-1920102913" endY="221" startX="40"></line>
+      <line endX="269" startY="216" marked="true" color="-1920102913" endY="79" startX="40"></line>
+      <line endX="221" startY="40" marked="true" color="-1920102913" endY="269" startX="84"></line>
+    </shape>
+    <shape name="wolf" rotatable="false" editableColorIndex="0">
+      <polygon color="255" filled="true" marked="false">
+        <point x="253" y="133"></point>
+        <point x="245" y="131"></point>
+        <point x="245" y="133"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="2" y="194"></point>
+        <point x="13" y="197"></point>
+        <point x="30" y="191"></point>
+        <point x="38" y="193"></point>
+        <point x="38" y="205"></point>
+        <point x="20" y="226"></point>
+        <point x="20" y="257"></point>
+        <point x="27" y="265"></point>
+        <point x="38" y="266"></point>
+        <point x="40" y="260"></point>
+        <point x="31" y="253"></point>
+        <point x="31" y="230"></point>
+        <point x="60" y="206"></point>
+        <point x="68" y="198"></point>
+        <point x="75" y="209"></point>
+        <point x="66" y="228"></point>
+        <point x="65" y="243"></point>
+        <point x="82" y="261"></point>
+        <point x="84" y="268"></point>
+        <point x="100" y="267"></point>
+        <point x="103" y="261"></point>
+        <point x="77" y="239"></point>
+        <point x="79" y="231"></point>
+        <point x="100" y="207"></point>
+        <point x="98" y="196"></point>
+        <point x="119" y="201"></point>
+        <point x="143" y="202"></point>
+        <point x="160" y="195"></point>
+        <point x="166" y="210"></point>
+        <point x="172" y="213"></point>
+        <point x="173" y="238"></point>
+        <point x="167" y="251"></point>
+        <point x="160" y="248"></point>
+        <point x="154" y="265"></point>
+        <point x="169" y="264"></point>
+        <point x="178" y="247"></point>
+        <point x="186" y="240"></point>
+        <point x="198" y="260"></point>
+        <point x="200" y="271"></point>
+        <point x="217" y="271"></point>
+        <point x="219" y="262"></point>
+        <point x="207" y="258"></point>
+        <point x="195" y="230"></point>
+        <point x="192" y="198"></point>
+        <point x="210" y="184"></point>
+        <point x="227" y="164"></point>
+        <point x="242" y="144"></point>
+        <point x="259" y="145"></point>
+        <point x="284" y="151"></point>
+        <point x="277" y="141"></point>
+        <point x="293" y="140"></point>
+        <point x="299" y="134"></point>
+        <point x="297" y="127"></point>
+        <point x="273" y="119"></point>
+        <point x="270" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="-1" y="195"></point>
+        <point x="14" y="180"></point>
+        <point x="36" y="166"></point>
+        <point x="40" y="153"></point>
+        <point x="53" y="140"></point>
+        <point x="82" y="131"></point>
+        <point x="134" y="133"></point>
+        <point x="159" y="126"></point>
+        <point x="188" y="115"></point>
+        <point x="227" y="108"></point>
+        <point x="236" y="102"></point>
+        <point x="238" y="98"></point>
+        <point x="268" y="86"></point>
+        <point x="269" y="92"></point>
+        <point x="281" y="87"></point>
+        <point x="269" y="103"></point>
+        <point x="269" y="113"></point>
+      </polygon>
+    </shape>
+    <shape name="x" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="270" y="75"></point>
+        <point x="225" y="30"></point>
+        <point x="30" y="225"></point>
+        <point x="75" y="270"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="75"></point>
+        <point x="75" y="30"></point>
+        <point x="270" y="225"></point>
+        <point x="225" y="270"></point>
+      </polygon>
+    </shape>
+  </turtleShapes>
+  <linkShapes>
+    <shape name="default" curviness="0.0">
+      <lines>
+        <line x="-0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+        <line x="0.0" visible="true">
+          <dash value="1.0"></dash>
+          <dash value="0.0"></dash>
+        </line>
+        <line x="0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+      </lines>
+      <indicator>
+        <shape name="link direction" rotatable="true" editableColorIndex="0">
+          <line endX="90" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+          <line endX="210" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+        </shape>
+      </indicator>
+    </shape>
+  </linkShapes>
+  <previewCommands>setup repeat 75 [ go ]</previewCommands>
+</model>
