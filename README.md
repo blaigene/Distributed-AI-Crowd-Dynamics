@@ -23,11 +23,15 @@ Agents utilize a **Short-term Intent Analysis**. Before attempting a move, an ag
 ### Anti-Deadlock Mechanism
 Implements a passive back-off protocol with a **Reservation Blacklist**. If an agent loses a negotiation, it temporarily blacklists the contested resource to explore alternative paths or wait for a more optimal state, preventing local oscillations.
 
-## 🚀 Scenarios & Benchmarking
-The model includes five high-stress environments:
-* **Asymmetric Capacity:** 1-vs-3 exit bottleneck analysis.
-- **Blocking Wall:** Extreme pathfinding stress test (Resilience evaluation).
-- **Symmetric Exits:** Baseline throughput benchmarking.
+The model was stress-tested under 5 different environmental configurations to evaluate coordination resilience.
+
+| Scenario | Visualization | Description |
+| :--- | :---: | :--- |
+| **Main Demo** | [Video](media/main_demo.mp4) | Main demo: central symmetric exits. |
+| **Blocking Wall** | [Video](media/blocking_wall_scenario.mp4) | Navigation through non-Euclidean complex barriers. |
+| **Single Bottleneck** | [Video](media/single_bottleneck_scenario.mp4) | Stress test on emergent queuing at a single exit. |
+| **Asymmetric Capacity** | [Video](media/asymmetric_capacity_scenario.mp4) | Efficiency analysis of resource disparity (1-vs-3). |
+| **External Symmetric** | [Video](media/external_symmetric_exits_scenario.mp4) | Long-distance pathfinding and flow distribution. |
 
 ## 📊 Analytical Metrics
 The system outputs a detailed performance report upon completion:
