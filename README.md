@@ -14,6 +14,8 @@ The system architecture is based on three pillars of distributed intelligence:
 * **Predictive Flow & Anti-Deadlock:** Implements **Short-term Intent Analysis** to allow movement into patches being vacated in the current tick, paired with a **Reservation Blacklist** to prevent local oscillations and gridlocks.
 * **Dynamic Pathfinding:** Topological cost mapping via **Dijkstra/Flood Fill** algorithm, ensuring 100% reliability in non-Euclidean environments with complex barriers.
 
+---
+
 ## 🚀 Experimental Scenarios & Benchmarking
 
 The model's coordination resilience was evaluated across 5 distinct environments. 
@@ -22,7 +24,7 @@ The model's coordination resilience was evaluated across 5 distinct environments
 The **Main Demo** showcases the baseline performance of the Iterative Reservation Protocol under balanced, symmetric exit conditions.
 
 <p align="center">
-  <video src="media/main_demo.mp4" width="100%" controls autoplay loop muted></video>
+  <img src="media/main_demo.gif" width="100%" alt="Main System Demo">
 </p>
 
 ---
@@ -32,16 +34,16 @@ Below is a comparative breakdown of the specific coordination challenges address
 
 | **Blocking Wall (Pathfinding)** | **Single Bottleneck (Queuing)** |
 | :---: | :---: |
-| <video src="media/blocking_wall_scenario.mp4" width="100%" autoplay loop muted></video> | <video src="media/single_bottleneck_scenario.mp4" width="100%" autoplay loop muted></video> |
+| ![Wall](media/blocking_wall_scenario.gif) | ![Bottleneck](media/single_bottleneck_scenario.gif) |
 | **Complex Navigation:** Dijkstra accuracy through barriers. | **Crowd Pressure:** Emergent single-file formation. |
 
 | **Asymmetric Capacity** | **External Symmetric** |
 | :---: | :---: |
-| <video src="media/asymmetric_capacity_scenario.mp4" width="100%" autoplay loop muted></video> | <video src="media/external_symmetric_exits_scenario.mp4" width="100%" autoplay loop muted></video> |
+| ![Asymmetric](media/asymmetric_capacity_scenario.gif) | ![External](media/external_symmetric_exits_scenario.gif) |
 | **Resource Disparity:** 1-vs-3 exit friction study. | **Flow Distribution:** Cost-map consistency. |
 
-> [!IMPORTANT]
-> If the videos do not autoplay in your browser, you can find the raw files in the `media/` folder. For maximum compatibility, viewing via Google Chrome or Microsoft Edge is recommended.
+> [!TIP]
+> Each GIF demonstrates a different edge case of the **Iterative Negotiation Protocol**. For a deeper dive into the metrics, refer to the [Project Presentation](docs/DAI_Evacuation_Presentation.pdf).
 
 > [!NOTE]
 > All simulations were recorded using a standardized agent density to ensure comparable metrics across different topological constraints.
