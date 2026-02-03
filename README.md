@@ -23,15 +23,32 @@ Agents utilize a **Short-term Intent Analysis**. Before attempting a move, an ag
 ### Anti-Deadlock Mechanism
 Implements a passive back-off protocol with a **Reservation Blacklist**. If an agent loses a negotiation, it temporarily blacklists the contested resource to explore alternative paths or wait for a more optimal state, preventing local oscillations.
 
-The model was stress-tested under 5 different environmental configurations to evaluate coordination resilience.
+## 🚀 Experimental Scenarios & Benchmarking
 
-| Scenario | Visualization | Description |
-| :--- | :---: | :--- |
-| **Main Demo** | [Video](media/main_demo.mp4) | Main demo: central symmetric exits. |
-| **Blocking Wall** | [Video](media/blocking_wall_scenario.mp4) | Navigation through non-Euclidean complex barriers. |
-| **Single Bottleneck** | [Video](media/single_bottleneck_scenario.mp4) | Stress test on emergent queuing at a single exit. |
-| **Asymmetric Capacity** | [Video](media/asymmetric_capacity_scenario.mp4) | Efficiency analysis of resource disparity (1-vs-3). |
-| **External Symmetric** | [Video](media/external_symmetric_exits_scenario.mp4) | Long-distance pathfinding and flow distribution. |
+The model's coordination resilience and emergent behaviors were evaluated across 5 distinct environmental configurations.
+
+### 🏆 Featured: Main System Demonstration
+The **Main Demo** showcases the baseline performance of the Iterative Reservation Protocol under balanced, symmetric exit conditions.
+
+https://github.com/blaigene/Distributed-AI-Crowd-Dynamics/media/main_demo.mp4
+
+---
+
+### 📂 Stress Test Gallery
+Below is a comparative breakdown of the specific coordination challenges addressed in each specialized environment:
+
+| **Blocking Wall** (Pathfinding) | **Single Bottleneck** (Queuing) |
+| :---: | :---: |
+| ![Wall](media/blocking_wall_scenario.mp4) | ![Bottleneck](media/single_bottleneck_scenario.mp4) |
+| **Complex Navigation:** Tests Dijkstra accuracy through architectural barriers. | **Crowd Pressure:** Analyzes emergent single-file formation under high density. |
+
+| **Asymmetric Capacity** | **External Symmetric** |
+| :---: | :---: |
+| ![Asymmetric](media/asymmetric_capacity_scenario.mp4) | ![External](media/external_symmetric_exits_scenario.mp4) |
+| **Resource Disparity:** Studies agent decision-making with 1-vs-3 exit friction. | **Flow Distribution:** Evaluates long-distance cost-map consistency. |
+
+> [!NOTE]
+> All simulations were recorded using a standardized agent density to ensure comparable metrics across different topological constraints.
 
 ## 📊 Analytical Metrics
 The system outputs a detailed performance report upon completion:
