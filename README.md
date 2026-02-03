@@ -5,23 +5,14 @@
 
 An advanced Agent-Based Model (ABM) developed to simulate high-density pedestrian flow using **Distributed Artificial Intelligence (DAI)** principles. This project moves away from simple reactive steering, implementing a sophisticated **Iterative Negotiation & Reservation Protocol** for spatial conflict resolution.
 
-## 🔬 Core Engineering Principles
+## 🔬 Core Engineering & Implementation
 
-The system is built upon three pillars of Distributed Intelligence:
+The system architecture is based on three pillars of distributed intelligence:
 
-1. **Iterative Reservation Protocol:** A distributed coordination mechanism where agents negotiate patch occupancy in real-time. It uses an asynchronous "lock" system (`reserved-by`) to prevent collisions and ensure fluid motion.
-2. **Game Theoretic Conflict Resolution:** A hierarchical priority system coupled with a greedy tie-breaking strategy.
-   * **Hierarchy:** High-priority agents (e.g., instructors) override standard requests.
-   * **Distance-based Optimization:** When hierarchies match, the agent with the lowest cost-to-goal wins the reservation, prioritizing the front of the queue.
-3. **Dynamic Pathfinding (Dijkstra-based):** A pre-calculated topological cost map using a Flood Fill/Dijkstra algorithm. This allows agents to navigate complex architectural barriers (non-Euclidean paths) with 100% reliability.
-
-## 🛠 Technical Implementation
-
-### Predictive Flow Logic
-Agents utilize a **Short-term Intent Analysis**. Before attempting a move, an agent checks if a target patch will be vacated in the same tick by its current occupant. This "look-ahead" behavior eliminates the classic "stop-and-go" waves found in simpler simulations.
-
-### Anti-Deadlock Mechanism
-Implements a passive back-off protocol with a **Reservation Blacklist**. If an agent loses a negotiation, it temporarily blacklists the contested resource to explore alternative paths or wait for a more optimal state, preventing local oscillations.
+* **Iterative Reservation Protocol:** A decentralized coordination mechanism using asynchronous "patch-locking" (`reserved-by`) to ensure fluid, collision-free movement.
+* **Game Theoretic Conflict Resolution:** Hierarchical priority (e.g., instructors vs. students) combined with greedy distance-based tie-breaking to optimize queue throughput.
+* **Predictive Flow & Anti-Deadlock:** Implements **Short-term Intent Analysis** to allow movement into patches being vacated in the current tick, paired with a **Reservation Blacklist** to prevent local oscillations and gridlocks.
+* **Dynamic Pathfinding:** Topological cost mapping via **Dijkstra/Flood Fill** algorithm, ensuring 100% reliability in non-Euclidean environments with complex barriers.
 
 ## 🚀 Experimental Scenarios & Benchmarking
 
