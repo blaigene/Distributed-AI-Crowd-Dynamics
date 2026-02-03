@@ -42,11 +42,14 @@ Below is a comparative breakdown of the specific coordination challenges address
 | ![Asymmetric](media/asymmetric_capacity_scenario.gif) | ![External](media/external_symmetric_exits_scenario.gif) |
 | **Resource Disparity:** 1-vs-3 exit friction study. | **Flow Distribution:** Cost-map consistency. |
 
+> [!NOTE]
+> All simulations were recorded using a standardized agent density to ensure comparable metrics across different topological constraints.
+
 > [!TIP]
 > Each GIF demonstrates a different edge case of the **Iterative Negotiation Protocol**. For a deeper dive into the metrics, refer to the [Project Presentation](docs/DAI_Evacuation_Presentation.pdf).
 
-> [!NOTE]
-> All simulations were recorded using a standardized agent density to ensure comparable metrics across different topological constraints.
+> [!TIP]
+> **High-Quality Video Versions:** If you prefer to view these simulations in higher resolution or with playback controls, all original `.mp4` files are available in the [media/](media/) directory.
 
 ## 📊 Analytical Metrics
 The system outputs a detailed performance report upon completion:
